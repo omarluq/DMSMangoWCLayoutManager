@@ -11,45 +11,90 @@ PluginComponent {
     property string mmsgCommand: "mmsg"
     readonly property real pillHorizontalPadding: Theme.spacingXS
     property string currentLayoutRaw: ""
+    // Layout active immediately before the current one, updated on every
+    // real transition regardless of source (click, scroll, right-click
+    // toggle, or an external tag change picked up via `mmsg watch`).
+    // Used by the right-click toggle to switch back.
+    property string previousLayoutRaw: ""
     property string lastError: ""
     property string queryBuffer: ""
     property string pendingLayoutId: ""
     property bool mangoAvailable: false
+    // Fallback target for the right-click toggle when there is no
+    // previousLayoutRaw yet (e.g. right after launch).
+    readonly property string rightClickFallbackId: "monocle"
+    // Timestamp (ms) of the last scroll-triggered layout switch, used to
+    // throttle bursts of wheel events from trackpad kinetic scrolling.
+    property real lastScrollCycleTime: 0
 
     readonly property string currentLayoutCode: formatLayoutCode(currentLayoutRaw)
     readonly property string currentLayoutIcon: formatLayoutIcon(currentLayoutRaw)
     readonly property bool busy: queryProcess.running || setProcess.running
-    readonly property var layoutOptions: LayoutPreviewData.options()
+    property var layoutOptions: root.visibleLayoutOptions()
+    readonly property string monitorName: root.parentScreen && root.parentScreen.name
+        ? String(root.parentScreen.name)
+        : ""
 
     popoutWidth: 560
     popoutHeight: 460
 
+    // Right-click and middle-click each toggle between their own
+    // independently configurable target layout and whatever was active
+    // before; scroll cycles through the configured layout list. All three
+    // read their config fresh from pluginService on every use, so edits
+    // made in the Settings page apply immediately.
+    pillRightClickAction: function () {
+        root.toggleRightClickLayout();
+    }
+
     Component.onCompleted: {
         refreshCurrentLayout();
-        watchProcess.running = true;
+        if (root.monitorName) {
+            watchProcess.running = true;
+        }
+        startupPollTimer.restart();
+    }
+
+    // mmsg has no monitor-agnostic query; every get/watch/dispatch is
+    // addressed to a specific output name.
+    onMonitorNameChanged: {
+        if (root.monitorName && !watchProcess.running) {
+            refreshCurrentLayout();
+            watchProcess.running = true;
+            startupPollTimer.restart();
+        }
+    }
+
+    // Defensive retry for a race at launch between the compositor/mmsg
+    // socket becoming ready and our first query: retries a few times,
+    // a short interval apart, until a layout is known.
+    Timer {
+        id: startupPollTimer
+        interval: 400
+        repeat: true
+        property int attempts: 0
+
+        onTriggered: {
+            attempts += 1;
+            if (root.mangoAvailable || attempts >= 5) {
+                stop();
+                attempts = 0;
+                return;
+            }
+            root.refreshCurrentLayout();
+        }
     }
 
     function normalizeLayoutValue(value) {
         const raw = String(value === undefined || value === null ? "" : value).trim();
-        const unquoted = raw.replace(/^"+|"+$/g, "");
-        if (!unquoted) {
-            return "";
-        }
-
-        const layoutMatch = unquoted.match(/\blayout\s+([A-Za-z_]+)\s*$/i);
-        if (layoutMatch) {
-            return layoutMatch[1].trim();
-        }
-
-        if (unquoted.indexOf(":") !== -1) {
-            const parts = unquoted.split(":");
-            return parts[parts.length - 1].trim();
-        }
-
-        return unquoted;
+        return raw.replace(/^"+|"+$/g, "");
     }
 
-    function extractLayoutFromQueryOutput(output) {
+    // `mmsg get monitor <name>` / `mmsg watch monitor <name>` each emit one
+    // JSON object per line (watch pushes the initial state immediately,
+    // then one line per change). The monitor's active layout is exposed as
+    // the short "layout_symbol" code (e.g. "T", "VK", "DW").
+    function extractLayoutSymbol(output) {
         const raw = String(output === undefined || output === null ? "" : output).trim();
         if (!raw) {
             return "";
@@ -60,56 +105,133 @@ PluginComponent {
             return "";
         }
 
-        const screenName = root.parentScreen && root.parentScreen.name
-            ? String(root.parentScreen.name).trim().toLowerCase()
-            : "";
-        let fallbackLayout = "";
-
-        for (let i = 0; i < lines.length; i += 1) {
-            const match = lines[i].match(/^(\S+)\s+layout\s+([A-Za-z_]+)\s*$/i);
-            if (!match) {
-                continue;
-            }
-
-            const lineScreen = String(match[1] || "").trim().toLowerCase();
-            const lineLayout = String(match[2] || "").trim();
-
-            if (!fallbackLayout) {
-                fallbackLayout = lineLayout;
-            }
-
-            if (screenName && lineScreen === screenName) {
-                return lineLayout;
-            }
+        try {
+            const data = JSON.parse(lines[lines.length - 1]);
+            return data && data.layout_symbol ? String(data.layout_symbol) : "";
+        } catch (e) {
+            return "";
         }
-
-        if (fallbackLayout) {
-            return fallbackLayout;
-        }
-
-        if (lines.length === 1) {
-            const normalized = normalizeLayoutValue(lines[0]);
-            if (normalized && normalized !== lines[0]) {
-                return normalized;
-            }
-
-            if (/^[A-Za-z_]+$/.test(lines[0])) {
-                return lines[0];
-            }
-        }
-
-        return "";
     }
 
     function applyLayoutUpdate(output) {
-        const parsed = extractLayoutFromQueryOutput(output);
-        if (!parsed) {
+        const symbol = extractLayoutSymbol(output);
+        if (!symbol) {
             return;
         }
 
-        currentLayoutRaw = parsed;
+        recordLayoutTransition(symbol);
         mangoAvailable = true;
         lastError = "";
+    }
+
+    // Single place that updates currentLayoutRaw, used both for changes
+    // detected externally (watch/query) and for changes we trigger
+    // ourselves (setLayout). Keeps previousLayoutRaw consistent
+    // regardless of what caused the transition.
+    function recordLayoutTransition(symbol) {
+        // Compare logical layout identity, not the raw string: currentLayoutRaw
+        // sometimes holds the mmsg code ("M") and sometimes a layout id
+        // ("monocle") depending on the source, and both can refer to the
+        // same layout via LayoutPreviewData's aliases.
+        const incomingOption = lookupLayout(symbol);
+        const currentOption = lookupLayout(currentLayoutRaw);
+        const incomingId = incomingOption ? incomingOption.id : normalizeLayoutValue(symbol);
+        const currentId = currentOption ? currentOption.id : normalizeLayoutValue(currentLayoutRaw);
+
+        if (incomingId && incomingId !== currentId && currentLayoutRaw) {
+            previousLayoutRaw = currentLayoutRaw;
+        }
+        currentLayoutRaw = symbol;
+    }
+
+    function loadPluginValue(key, defaultValue) {
+        if (root.pluginService && root.pluginService.loadPluginData) {
+            return root.pluginService.loadPluginData(root.pluginId, key, defaultValue);
+        }
+        return defaultValue;
+    }
+
+    // Shared by the right-click and middle-click toggles: reads `settingKey`
+    // fresh from pluginService on every use (so Settings-page edits apply
+    // immediately), then either switches to targetId or, if that's already
+    // the active layout, back to whatever was active before it (falling
+    // back to fallbackId when there's no previousLayoutRaw yet).
+    function toggleConfiguredLayout(settingKey, fallbackId) {
+        const targetId = normalizeLayoutValue(loadPluginValue(settingKey, fallbackId));
+        if (!targetId) {
+            return;
+        }
+
+        if (isCurrentLayout(targetId)) {
+            const previousOption = root.previousLayoutRaw ? lookupLayout(root.previousLayoutRaw) : null;
+            const returnId = previousOption ? previousOption.id : (targetId !== fallbackId ? fallbackId : "");
+            if (returnId) {
+                setLayout(returnId);
+            }
+            return;
+        }
+
+        setLayout(targetId);
+    }
+
+    // Right-click must work even before the Settings page has ever been
+    // opened and saved a value, hence the rightClickFallbackId default.
+    function toggleRightClickLayout() {
+        root.toggleConfiguredLayout("rightClickTarget", root.rightClickFallbackId);
+    }
+
+    // Middle-click has no fallback: it's a second, independent target the
+    // user opts into from Settings, "None" (disabled) until then.
+    function toggleMiddleClickLayout() {
+        root.toggleConfiguredLayout("middleClickTarget", "");
+    }
+
+    // Ordered, visibility-filtered layout list — single source of truth for
+    // both the popout grid (layoutOptions) and the scroll cycle, driven by
+    // the Settings page's "Scroll cycle" list. Falls back to every known
+    // layout, in the popout's natural order, when nothing has been
+    // configured yet. Deliberately NOT applied to the right-click target
+    // dropdown, which lists every layout regardless of visibility here —
+    // that lets a layout be reachable only via right-click, hidden from
+    // the grid and the scroll cycle.
+    function visibleLayoutOptions() {
+        const stored = loadPluginValue("scrollCycleLayouts", null);
+        if (Array.isArray(stored) && stored.length > 0) {
+            return stored
+                .filter(entry => entry && entry.id && entry.enabled !== false)
+                .map(entry => LayoutPreviewData.findOption(entry.id))
+                .filter(option => option);
+        }
+        return LayoutPreviewData.options();
+    }
+
+    function cycleLayout(direction) {
+        // Ordered list of layout ids to cycle through with the scroll wheel.
+        const ids = root.visibleLayoutOptions().map(option => option.id);
+        if (ids.length === 0) {
+            return;
+        }
+
+        const currentOption = lookupLayout(root.currentLayoutRaw);
+        const currentId = currentOption ? currentOption.id : "";
+        const index = ids.indexOf(currentId);
+        const nextIndex = ((index + direction) % ids.length + ids.length) % ids.length;
+        root.setLayout(ids[nextIndex]);
+    }
+
+    // Throttles scroll-triggered layout switches: trackpad kinetic scroll
+    // fires many wheel events per physical swipe, each of which would
+    // otherwise cycle one more layout. scrollCooldownMs (Settings page,
+    // default matches SliderSetting's defaultValue: 500) sets the minimum
+    // gap between two accepted switches.
+    function handleScrollCycle(direction) {
+        const cooldown = loadPluginValue("scrollCooldownMs", 500);
+        const now = Date.now();
+        if (now - root.lastScrollCycleTime < cooldown) {
+            return;
+        }
+        root.lastScrollCycleTime = now;
+        root.cycleLayout(direction);
     }
 
     function lookupLayout(value) {
@@ -150,6 +272,10 @@ PluginComponent {
             return;
         }
 
+        if (!root.monitorName) {
+            return;
+        }
+
         queryBuffer = "";
         queryProcess.running = true;
     }
@@ -161,13 +287,13 @@ PluginComponent {
 
         pendingLayoutId = layoutId;
         lastError = "";
-        setProcess.command = [mmsgCommand, "-d", "setlayout," + layoutId];
+        setProcess.command = [mmsgCommand, "dispatch", "setlayout," + layoutId];
         setProcess.running = true;
     }
 
     Process {
         id: queryProcess
-        command: [root.mmsgCommand, "-g", "-l"]
+        command: [root.mmsgCommand, "get", "monitor", root.monitorName]
         running: false
 
         stdout: SplitParser {
@@ -181,14 +307,14 @@ PluginComponent {
                 root.applyLayoutUpdate(root.queryBuffer);
             } else {
                 root.mangoAvailable = false;
-                root.lastError = "Failed to query MangoWC with mmsg -g -l.";
+                root.lastError = "Failed to query MangoWM with mmsg get monitor.";
             }
         }
     }
 
     Process {
         id: watchProcess
-        command: [root.mmsgCommand, "-w", "-t", "-l"]
+        command: [root.mmsgCommand, "watch", "monitor", root.monitorName]
         running: false
 
         stdout: SplitParser {
@@ -199,7 +325,7 @@ PluginComponent {
 
         onExited: exitCode => {
             if (exitCode !== 0) {
-                root.lastError = "Failed to watch MangoWC layout changes with mmsg -w -t -l.";
+                root.lastError = "Failed to watch MangoWM layout changes with mmsg watch monitor.";
                 root.mangoAvailable = false;
             }
         }
@@ -207,18 +333,18 @@ PluginComponent {
 
     Process {
         id: setProcess
-        command: [root.mmsgCommand, "-d", ""]
+        command: [root.mmsgCommand, "dispatch", ""]
         running: false
 
         onExited: exitCode => {
             if (exitCode === 0) {
                 root.mangoAvailable = true;
                 root.lastError = "";
-                root.currentLayoutRaw = root.pendingLayoutId;
+                root.recordLayoutTransition(root.pendingLayoutId);
                 root.closePopout();
                 Qt.callLater(root.refreshCurrentLayout);
             } else {
-                root.lastError = "Failed to switch layout with mmsg -d setlayout,<layout>.";
+                root.lastError = "Failed to switch layout with mmsg dispatch setlayout,<layout>.";
             }
 
             root.pendingLayoutId = "";
@@ -232,6 +358,8 @@ PluginComponent {
             iconName: root.currentLayoutIcon
             widgetThickness: root.widgetThickness
             horizontalPadding: root.pillHorizontalPadding
+            onScrollRequested: direction => root.handleScrollCycle(direction)
+            onMiddleClickRequested: root.toggleMiddleClickLayout()
         }
     }
 
@@ -242,6 +370,8 @@ PluginComponent {
             code: root.currentLayoutCode
             iconName: root.currentLayoutIcon
             widgetThickness: root.widgetThickness
+            onScrollRequested: direction => root.handleScrollCycle(direction)
+            onMiddleClickRequested: root.toggleMiddleClickLayout()
         }
     }
 
@@ -251,6 +381,18 @@ PluginComponent {
             headerText: ""
             detailsText: ""
             showCloseButton: true
+
+            // Force a fresh query every time the popout is actually shown,
+            // not just at plugin startup: `opened` fires on every open
+            // (verified in DankPopoutStandalone.qml), unlike Component.onCompleted
+            // which only fires once since this content stays alive across toggles.
+            Connections {
+                target: chooser.parentPopout
+                function onOpened() {
+                    root.refreshCurrentLayout();
+                    root.layoutOptions = root.visibleLayoutOptions();
+                }
+            }
 
             Column {
                 width: parent.width
@@ -273,7 +415,7 @@ PluginComponent {
                         }
 
                         StyledText {
-                            text: "MangoWC Layout Manager"
+                            text: "MangoWM Layout Manager"
                             color: Theme.surfaceText
                             font.pixelSize: Theme.fontSizeLarge
                             font.weight: Font.DemiBold
@@ -309,7 +451,11 @@ PluginComponent {
 
                 DankFlickable {
                     width: parent.width
-                    height: Math.max(160, root.popoutHeight - chooser.headerHeight - chooser.detailsHeight - titleRow.implicitHeight - (root.lastError !== "" ? 132 : 72))
+                    // Size to the actual grid content so the popout (which auto-grows to
+                    // its content's implicitHeight, see PluginPopout.qml) shows every
+                    // layout tile without clipping; cap at 75% of screen height as a
+                    // safety net for short displays.
+                    height: Math.min(buttonGrid.implicitHeight + Theme.spacingM * 2, root.parentScreen ? root.parentScreen.height * 0.75 : 700)
                     clip: true
                     contentWidth: width
                     contentHeight: buttonGrid.implicitHeight + Theme.spacingM * 2
