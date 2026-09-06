@@ -210,8 +210,15 @@ PluginSettings {
                         property int pressIndex: 0
                         property int pendingSteps: 0
 
+                        // Measure against a stationary ancestor (scrollList),
+                        // not this MouseArea's own frame: dragArea lives inside
+                        // `row`, which is translated by dragOffsetY while
+                        // dragging, so mouse.y here is in a moving frame and
+                        // mouse.y - pressY would cancel out the very movement we
+                        // want to track. Mapping both endpoints into scrollList
+                        // gives a fixed reference.
                         onPressed: mouse => {
-                            pressY = mouse.y;
+                            pressY = mapToItem(scrollList, mouse.x, mouse.y).y;
                             pressIndex = row.index;
                             pendingSteps = 0;
                         }
@@ -219,7 +226,7 @@ PluginSettings {
                             if (!pressed) {
                                 return;
                             }
-                            const totalDelta = mouse.y - pressY;
+                            const totalDelta = mapToItem(scrollList, mouse.x, mouse.y).y - pressY;
                             pendingSteps = Math.trunc(totalDelta / dragHandle.slotHeight);
                             row.dragOffsetY = totalDelta;
                         }
