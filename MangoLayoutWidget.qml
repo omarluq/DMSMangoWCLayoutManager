@@ -68,9 +68,7 @@ PluginComponent {
             // Tear the stale watcher down first; the restart (if any) is
             // deferred to watchProcess.onExited once the old process has
             // actually exited, so we never leave a watcher subscribed to
-            // the old monitor and never race a half-dead process. The
-            // command binding has already updated to the new monitor, so
-            // the restart picks it up.
+            // the old monitor and never race a half-dead process.
             root.watchRestartPending = true;
             watchProcess.running = false;
         } else {
@@ -85,6 +83,8 @@ PluginComponent {
             return;
         }
         refreshCurrentLayout();
+        // Capture the monitor now; its dependent command binding may still be stale.
+        watchProcess.command = [root.mmsgCommand, "watch", "monitor", root.monitorName];
         watchProcess.running = true;
         startupPollTimer.restart();
     }
@@ -310,6 +310,7 @@ PluginComponent {
 
         queryBuffer = "";
         queryMonitor = root.monitorName;
+        queryProcess.command = [root.mmsgCommand, "get", "monitor", root.queryMonitor];
         queryProcess.running = true;
     }
 
