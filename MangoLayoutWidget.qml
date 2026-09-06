@@ -215,7 +215,15 @@ PluginComponent {
         const currentOption = lookupLayout(root.currentLayoutRaw);
         const currentId = currentOption ? currentOption.id : "";
         const index = ids.indexOf(currentId);
-        const nextIndex = ((index + direction) % ids.length + ids.length) % ids.length;
+        // When the current layout is not in the cycle list (index === -1),
+        // forward should land on the first entry and backward on the last,
+        // rather than modulo arithmetic off the -1 sentinel.
+        let nextIndex;
+        if (index === -1) {
+            nextIndex = direction >= 0 ? 0 : ids.length - 1;
+        } else {
+            nextIndex = ((index + direction) % ids.length + ids.length) % ids.length;
+        }
         root.setLayout(ids[nextIndex]);
     }
 
