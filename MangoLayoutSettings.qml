@@ -56,8 +56,8 @@ PluginSettings {
             }))
 
         function moveItem(index, delta) {
-            const newIndex = index + delta;
-            if (newIndex < 0 || newIndex >= scrollList.items.length) {
+            const newIndex = Math.max(0, Math.min(scrollList.items.length - 1, index + delta));
+            if (newIndex === index) {
                 return;
             }
             const reordered = scrollList.items.slice();
