@@ -1,14 +1,15 @@
 {
-	"id": "DMSMangoWCLayoutManager",
-	"name": "MangoWC Layout Manager",
-	"description": "Switch the active MangoWC layout from DankBar.",
-	"version": "0.1.0",
+	"id": "mangoWmLayoutManager",
+	"name": "MangoWM Layout Manager",
+	"description": "Switch the active MangoWM layout from DankBar",
+	"version": "0.3.4",
 	"author": "omarluq",
 	"type": "widget",
-	"capabilities": ["dankbar-widget", "window-management", "mangowc"],
+	"capabilities": ["dankbar-widget", "window-management", "mangowm"],
 	"component": "./MangoLayoutWidget.qml",
+	"settings": "./MangoLayoutSettings.qml",
 	"icon": "grid_view",
 	"requires_dms": ">=1.2.0",
 	"requires": ["mmsg"],
-	"permissions": ["process"]
+	"permissions": ["process", "settings_read", "settings_write"]
 }

@@ -74,16 +74,30 @@ var OPTION_DATA = [
     {
         id: "vertical_deck",
         label: "Vertical Deck",
-        code: "VD",
+        code: "VK",
         icon: "view_day",
-        aliases: ["vertical_deck", "VD"]
+        aliases: ["vertical_deck", "VK"]
     },
     {
-        id: "tgmix",
-        label: "TG Mix",
-        code: "TG",
-        icon: "dashboard",
-        aliases: ["tgmix", "TG"]
+        id: "dwindle",
+        label: "Dwindle",
+        code: "DW",
+        icon: "account_tree",
+        aliases: ["dwindle", "DW"]
+    },
+    {
+        id: "fair",
+        label: "Fair",
+        code: "F",
+        icon: "horizontal_distribute",
+        aliases: ["fair", "F"]
+    },
+    {
+        id: "vertical_fair",
+        label: "Vertical Fair",
+        code: "VF",
+        icon: "vertical_distribute",
+        aliases: ["vertical_fair", "VF"]
     }
 ];
 
@@ -200,14 +214,28 @@ function windowSpecs(layoutId) {
             { x: 0.18, y: 0.66, w: 0.64, h: 0.24, opacity: 0.82, z: 2 },
             { x: 0.25, y: 0.72, w: 0.50, h: 0.22, opacity: 0.92, z: 4 }
         ];
-    case "tgmix":
+    case "dwindle":
         return [
-            { x: 0.0, y: 0.0, w: 0.52, h: 0.60, accent: true },
-            { x: 0.58, y: 0.0, w: 0.42, h: 0.28 },
-            { x: 0.58, y: 0.34, w: 0.42, h: 0.26 },
-            { x: 0.0, y: 0.66, w: 0.30, h: 0.34 },
-            { x: 0.36, y: 0.66, w: 0.30, h: 0.34 },
-            { x: 0.72, y: 0.66, w: 0.28, h: 0.34 }
+            { x: 0.0, y: 0.0, w: 0.60, h: 1.0, accent: true },
+            { x: 0.62, y: 0.0, w: 0.38, h: 0.58 },
+            { x: 0.62, y: 0.60, w: 0.20, h: 0.40 },
+            { x: 0.84, y: 0.60, w: 0.16, h: 0.40 }
+        ];
+    case "fair":
+        return [
+            { x: 0.0, y: 0.0, w: 0.32, h: 0.48, accent: true },
+            { x: 0.34, y: 0.0, w: 0.32, h: 0.48 },
+            { x: 0.68, y: 0.0, w: 0.32, h: 0.48 },
+            { x: 0.0, y: 0.52, w: 0.49, h: 0.48 },
+            { x: 0.51, y: 0.52, w: 0.49, h: 0.48 }
+        ];
+    case "vertical_fair":
+        return [
+            { x: 0.0, y: 0.0, w: 0.48, h: 0.32, accent: true },
+            { x: 0.0, y: 0.34, w: 0.48, h: 0.32 },
+            { x: 0.0, y: 0.68, w: 0.48, h: 0.32 },
+            { x: 0.52, y: 0.0, w: 0.48, h: 0.49 },
+            { x: 0.52, y: 0.51, w: 0.48, h: 0.49 }
         ];
     default:
         return [
