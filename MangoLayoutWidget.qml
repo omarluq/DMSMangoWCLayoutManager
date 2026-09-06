@@ -19,6 +19,15 @@ PluginComponent {
     property string lastError: ""
     property string queryBuffer: ""
     property string pendingLayoutId: ""
+    // Monitor name a get-monitor query was launched against, captured at
+    // start so a late result for a monitor we've since moved away from can
+    // be discarded instead of overwriting the new monitor's layout.
+    property string queryMonitor: ""
+    // Set while intentionally tearing down the watcher for a monitor change
+    // (or removal), so the exit is treated as expected (no error) and, once
+    // the old process has actually exited, a fresh watcher is started for
+    // the current monitor if there is one.
+    property bool watchRestartPending: false
     property bool mangoAvailable: false
     // Fallback target for the right-click toggle when there is no
     // previousLayoutRaw yet (e.g. right after launch).
@@ -48,21 +57,36 @@ PluginComponent {
     }
 
     Component.onCompleted: {
-        refreshCurrentLayout();
-        if (root.monitorName) {
-            watchProcess.running = true;
-        }
-        startupPollTimer.restart();
+        startWatch();
     }
 
     // mmsg has no monitor-agnostic query; every get/watch/dispatch is
-    // addressed to a specific output name.
+    // addressed to a specific output name, so moving the widget to another
+    // screen (or losing its screen) must resubscribe the watcher.
     onMonitorNameChanged: {
-        if (root.monitorName && !watchProcess.running) {
-            refreshCurrentLayout();
-            watchProcess.running = true;
-            startupPollTimer.restart();
+        if (watchProcess.running) {
+            // Tear the stale watcher down first; the restart (if any) is
+            // deferred to watchProcess.onExited once the old process has
+            // actually exited, so we never leave a watcher subscribed to
+            // the old monitor and never race a half-dead process. The
+            // command binding has already updated to the new monitor, so
+            // the restart picks it up.
+            root.watchRestartPending = true;
+            watchProcess.running = false;
+        } else {
+            startWatch();
         }
+    }
+
+    // Starts the watcher for the current monitor. No-op when there is no
+    // monitor (empty name stops watching) or one is already running.
+    function startWatch() {
+        if (!root.monitorName || watchProcess.running) {
+            return;
+        }
+        refreshCurrentLayout();
+        watchProcess.running = true;
+        startupPollTimer.restart();
     }
 
     // Defensive retry for a race at launch between the compositor/mmsg
@@ -285,6 +309,7 @@ PluginComponent {
         }
 
         queryBuffer = "";
+        queryMonitor = root.monitorName;
         queryProcess.running = true;
     }
 
@@ -311,6 +336,11 @@ PluginComponent {
         }
 
         onExited: exitCode => {
+            // Discard a result for a monitor we've since left so it can't
+            // clobber the current monitor's layout state.
+            if (root.queryMonitor !== root.monitorName) {
+                return;
+            }
             if (exitCode === 0) {
                 root.applyLayoutUpdate(root.queryBuffer);
             } else {
@@ -327,11 +357,21 @@ PluginComponent {
 
         stdout: SplitParser {
             onRead: data => {
-                root.applyLayoutUpdate(data);
+                if (!root.watchRestartPending) {
+                    root.applyLayoutUpdate(data);
+                }
             }
         }
 
         onExited: exitCode => {
+            if (root.watchRestartPending) {
+                // Expected exit from an intentional stop (monitor change or
+                // removal); not an error. Start a fresh watcher for the
+                // current monitor, or stay stopped if it's now empty.
+                root.watchRestartPending = false;
+                root.startWatch();
+                return;
+            }
             if (exitCode !== 0) {
                 root.lastError = "Failed to watch MangoWM layout changes with mmsg watch monitor.";
                 root.mangoAvailable = false;
