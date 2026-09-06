@@ -10,6 +10,10 @@ This plugin requires MangoWM's IPC helper:
 
 - `mmsg`
 
+DMS must inherit `MANGO_INSTANCE_SIGNATURE`, which points to the running
+MangoWM instance's IPC socket. Start DMS within your MangoWM session so its
+`mmsg` processes inherit this environment variable.
+
 The widget uses:
 
 - `mmsg get monitor <name>` / `mmsg watch monitor <name>` to read the current layout
@@ -55,7 +59,7 @@ Configurable from the plugin's page in DMS' Plugins settings tab:
 
 The chooser ships with the layouts documented by MangoWM at:
 
-- https://mangowm.github.io/window-management/layouts/
+- https://mangowm.github.io/docs/window-management/layouts/
 
 Included layouts:
 
